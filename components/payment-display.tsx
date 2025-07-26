@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Copy, RefreshCw, ExternalLink, CheckCircle, Info, AlertTriangle } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { PaymentData, PaymentRequest } from "@/app/page"
+import { ManualVerification } from "./manual-verification"
 
 interface PaymentDisplayProps {
   paymentData: PaymentData
@@ -20,6 +21,7 @@ interface PaymentStatus {
   balance?: number
   apiStatus?: any
   debugInfo?: any
+  manualMode?: boolean
 }
 
 export function PaymentDisplay({ paymentData, paymentRequest, onReset }: PaymentDisplayProps) {
@@ -29,6 +31,23 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
   const [checkCount, setCheckCount] = useState(0)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
+  const [showManualVerification, setShowManualVerification] = useState(false)
+
+  const handleManualVerificationSuccess = (txHash: string, amount: number) => {
+    setStatus("confirmed")
+    setPaymentStatus((prev) => ({
+      ...prev,
+      confirmed: true,
+      debugInfo: {
+        ...prev?.debugInfo,
+        manualVerification: {
+          txHash,
+          amount,
+          verifiedAt: new Date().toISOString(),
+        },
+      },
+    }))
+  }
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -49,10 +68,17 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
       )
 
       const data = await response.json()
+      console.log("Payment check response:", data)
+
       setPaymentStatus(data)
 
       if (data.confirmed) {
         setStatus("confirmed")
+      }
+
+      // Show manual verification if API failed or manual mode is enabled
+      if (data.manualMode || data.apiStatus?.status === "0") {
+        setShowManualVerification(true)
       }
 
       setLastChecked(new Date())
@@ -60,11 +86,13 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
       console.error("Error checking payment:", error)
       setPaymentStatus({
         confirmed: false,
+        manualMode: true,
         debugInfo: {
           error: error instanceof Error ? error.message : "Unknown error",
           timestamp: new Date().toISOString(),
         },
       })
+      setShowManualVerification(true)
     } finally {
       setIsChecking(false)
     }
@@ -74,7 +102,7 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
     checkPayment() // Initial check
 
     if (status === "pending") {
-      const interval = setInterval(checkPayment, 10000) // Check every 10 seconds
+      const interval = setInterval(checkPayment, 15000) // Check every 15 seconds
       return () => clearInterval(interval)
     }
   }, [status])
@@ -84,16 +112,23 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle>Payment Details</CardTitle>
-          <Badge variant={status === "confirmed" ? "default" : "secondary"}>
-            {status === "confirmed" ? (
-              <>
-                <CheckCircle className="w-3 h-3 mr-1" />
-                Confirmed
-              </>
-            ) : (
-              "Pending"
+          <div className="flex gap-2">
+            {paymentStatus?.manualMode && (
+              <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200">
+                Manual Mode
+              </Badge>
             )}
-          </Badge>
+            <Badge variant={status === "confirmed" ? "default" : "secondary"}>
+              {status === "confirmed" ? (
+                <>
+                  <CheckCircle className="w-3 h-3 mr-1" />
+                  Confirmed
+                </>
+              ) : (
+                "Pending"
+              )}
+            </Badge>
+          </div>
         </div>
         {lastChecked && (
           <p className="text-xs text-gray-500">
@@ -193,47 +228,46 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
                   <p>
                     <strong>Message:</strong> {paymentStatus.apiStatus.message}
                   </p>
-                  {paymentStatus.apiStatus.result && (
-                    <p>
-                      <strong>Result:</strong> {paymentStatus.apiStatus.result}
-                    </p>
-                  )}
                 </div>
               )}
             </div>
 
             {/* Recent Transactions */}
-            {paymentStatus?.transactions && paymentStatus.transactions.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-gray-600">Recent USDT Transactions</p>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {paymentStatus.transactions.map((tx: any, index: number) => (
-                    <div key={index} className="flex items-center justify-between p-2 rounded text-xs bg-gray-50">
-                      <div>
-                        <p className="font-mono">{tx.value} USDT</p>
-                        <p className="text-gray-500">{new Date(tx.timestamp).toLocaleString()}</p>
+            {paymentStatus?.transactions &&
+              Array.isArray(paymentStatus.transactions) &&
+              paymentStatus.transactions.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-600">Recent USDT Transactions</p>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {paymentStatus.transactions.map((tx: any, index: number) => (
+                      <div key={index} className="flex items-center justify-between p-2 rounded text-xs bg-gray-50">
+                        <div>
+                          <p className="font-mono">{tx.value} USDT</p>
+                          <p className="text-gray-500">{new Date(tx.timestamp).toLocaleString()}</p>
+                        </div>
+                        <Button variant="outline" size="sm" asChild>
+                          <a href={`https://bscscan.com/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer">
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </Button>
                       </div>
-                      <Button variant="outline" size="sm" asChild>
-                        <a href={`https://bscscan.com/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </Button>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            {/* Manual Mode Warning */}
+            {paymentStatus?.manualMode && (
+              <div className="p-3 bg-orange-50 rounded-lg border border-orange-200">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-orange-600 mt-0.5" />
+                  <div className="text-sm text-orange-800">
+                    <p className="font-medium">Manual Verification Required</p>
+                    <p className="mt-1">Automatic payment detection failed. Please use manual verification below.</p>
+                  </div>
                 </div>
               </div>
             )}
-
-            {/* Auto-check Status */}
-            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div>
-                <p className="text-sm font-medium">Auto-Check</p>
-                <p className="text-xs text-gray-500">Checking every 10 seconds</p>
-              </div>
-              <Badge variant={status === "pending" ? "default" : "secondary"}>
-                {status === "pending" ? "Active" : "Stopped"}
-              </Badge>
-            </div>
           </TabsContent>
 
           <TabsContent value="debug" className="space-y-4">
@@ -242,7 +276,7 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
               <p className="text-sm font-medium text-gray-600">API Configuration</p>
               <div className="p-3 bg-gray-50 rounded-lg text-xs space-y-1">
                 <p>
-                  <strong>Endpoint:</strong> api-bsc.etherscan.io
+                  <strong>Endpoint:</strong> api.bscscan.com
                 </p>
                 <p>
                   <strong>Network:</strong> Binance Smart Chain (BSC)
@@ -254,12 +288,12 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
                   <strong>Your Address:</strong> {paymentData.address_in}
                 </p>
                 <p>
-                  <strong>API Key:</strong> {process.env.BSCSCAN_API_KEY ? "Configured" : "Missing"}
+                  <strong>API Key:</strong> {process.env.ETHERSCAN_API_KEY ? "Configured" : "Missing"}
                 </p>
               </div>
             </div>
 
-            {/* Request/Response Debug */}
+            {/* Debug Information */}
             {paymentStatus?.debugInfo && (
               <div className="space-y-2">
                 <p className="text-sm font-medium text-gray-600">Debug Information</p>
@@ -267,36 +301,6 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
                   <pre className="text-xs font-mono whitespace-pre-wrap">
                     {JSON.stringify(paymentStatus.debugInfo, null, 2)}
                   </pre>
-                </div>
-              </div>
-            )}
-
-            {/* API Error Help */}
-            {paymentStatus?.apiStatus?.status !== "1" && (
-              <div className="p-3 bg-red-50 rounded-lg border border-red-200">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5" />
-                  <div className="text-sm text-red-800">
-                    <p className="font-medium">API Error Detected</p>
-                    <p className="mt-1">{paymentStatus?.apiStatus?.message}</p>
-
-                    {paymentStatus?.apiStatus?.message?.includes("Invalid API Key") && (
-                      <div className="mt-2 text-xs">
-                        <p className="font-medium">Fix API Key Issue:</p>
-                        <ol className="list-decimal pl-4 mt-1 space-y-1">
-                          <li>
-                            Go to{" "}
-                            <a href="https://bscscan.com/apis" target="_blank" className="underline" rel="noreferrer">
-                              bscscan.com/apis
-                            </a>
-                          </li>
-                          <li>Create account and verify email</li>
-                          <li>Generate new API key</li>
-                          <li>Add as BSCSCAN_API_KEY environment variable</li>
-                        </ol>
-                      </div>
-                    )}
-                  </div>
                 </div>
               </div>
             )}
@@ -319,6 +323,14 @@ export function PaymentDisplay({ paymentData, paymentRequest, onReset }: Payment
             </div>
           </TabsContent>
         </Tabs>
+
+        {showManualVerification && (
+          <ManualVerification
+            address={paymentData.address_in}
+            expectedAmount={paymentRequest.amount}
+            onVerificationSuccess={handleManualVerificationSuccess}
+          />
+        )}
 
         <div className="flex gap-2">
           <Button variant="outline" onClick={checkPayment} disabled={isChecking} className="flex-1 bg-transparent">
